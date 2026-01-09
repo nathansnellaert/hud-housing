@@ -26,11 +26,11 @@ DATASETS = {
         "desc": "Section 8 income limits by area",
         "format": "xlsx",
     },
-    "pit_2023": {
-        "url": "https://www.huduser.gov/portal/sites/default/files/xls/2007-2023-PIT-Counts-by-CoC.xlsx",
+    "pit_2024": {
+        "url": "https://www.huduser.gov/portal/sites/default/files/xls/2007-2024-PIT-Counts-by-CoC.xlsb",
         "name": "Point-in-Time Homeless Counts",
-        "desc": "Annual homeless counts by Continuum of Care",
-        "format": "xlsx",
+        "desc": "Annual homeless counts by Continuum of Care (2007-2024)",
+        "format": "xlsb",
     },
 }
 

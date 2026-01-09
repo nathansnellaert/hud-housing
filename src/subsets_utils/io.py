@@ -5,6 +5,7 @@ import io
 import json
 import gzip
 import uuid
+import hashlib
 from datetime import datetime
 from pathlib import Path
 import pyarrow as pa
@@ -13,6 +14,67 @@ from deltalake import write_deltalake, DeltaTable
 from . import debug
 from .environment import get_data_dir
 from .r2 import is_cloud_mode, upload_bytes, upload_file, download_bytes, get_storage_options, get_delta_table_uri, get_bucket_name, get_connector_name
+
+
+def _compute_table_hash(table: pa.Table) -> str:
+    """Compute a stable hash of a PyArrow table for change detection."""
+    # Write to parquet bytes for consistent hashing
+    buffer = io.BytesIO()
+    pq.write_table(table, buffer, compression='snappy')
+    return hashlib.sha256(buffer.getvalue()).hexdigest()[:16]
+
+
+def _get_hash_state_key(dataset_name: str) -> str:
+    return f"_hash_{dataset_name}"
+
+
+def sync_data(data: pa.Table, dataset_name: str, mode: str = "overwrite") -> str | None:
+    """Sync a PyArrow table to a Delta table, only if data has changed.
+
+    Returns the table URI if data was synced, None if no changes detected.
+    """
+    if len(data) == 0:
+        print(f"No data to sync for {dataset_name}")
+        return None
+
+    # Compute hash of new data
+    new_hash = _compute_table_hash(data)
+
+    # Load existing hash from state
+    state = load_state(_get_hash_state_key(dataset_name))
+    old_hash = state.get("hash")
+
+    if old_hash == new_hash:
+        print(f"No changes detected for {dataset_name} (hash: {new_hash})")
+        return None
+
+    # Data has changed, upload it
+    size_mb = round(data.nbytes / 1024 / 1024, 2)
+    columns = ', '.join([f.name for f in data.schema])
+    print(f"Syncing {dataset_name}: {len(data)} rows, {len(data.schema)} cols ({columns}), {size_mb} MB")
+    if old_hash:
+        print(f"  Hash changed: {old_hash} -> {new_hash}")
+    else:
+        print(f"  New dataset (hash: {new_hash})")
+
+    if is_cloud_mode():
+        table_uri = get_delta_table_uri(dataset_name)
+        storage_options = get_storage_options()
+    else:
+        table_uri = str(Path(get_data_dir()) / "subsets" / dataset_name)
+        storage_options = None
+
+    write_deltalake(table_uri, data, mode=mode, storage_options=storage_options,
+                    schema_mode="overwrite")
+
+    # Save new hash to state
+    save_state(_get_hash_state_key(dataset_name), {"hash": new_hash})
+
+    # Log output
+    null_counts = {col: data[col].null_count for col in data.column_names if data[col].null_count > 0}
+    debug.log_data_output(dataset_name=dataset_name, row_count=len(data), size_bytes=data.nbytes,
+                          columns=data.column_names, column_count=len(data.schema), null_counts=null_counts, mode=mode)
+    return table_uri
 
 
 # --- Delta table operations ---
@@ -256,3 +318,48 @@ def load_raw_parquet(asset_id: str) -> pa.Table:
         if not path.exists():
             raise FileNotFoundError(f"Raw parquet asset '{asset_id}' not found at {path}")
         return pq.read_table(path)
+
+
+def load_raw_parquet_as_dicts(asset_id: str) -> list[dict]:
+    """Load raw Parquet file and return as list of dicts."""
+    table = load_raw_parquet(asset_id)
+    return table.to_pylist()
+
+
+def raw_exists(asset_id: str, extension: str = "json") -> bool:
+    """Check if a raw asset exists."""
+    if is_cloud_mode():
+        data = download_bytes(_raw_key(asset_id, extension))
+        return data is not None
+    else:
+        path = _raw_path(asset_id, extension)
+        return path.exists()
+
+
+def list_raw_files(pattern: str = "*") -> list[str]:
+    """List raw files matching a pattern. Returns asset IDs (without extension)."""
+    import fnmatch
+    if is_cloud_mode():
+        from .r2 import list_keys
+        prefix = f"{get_connector_name()}/data/raw/"
+        keys = list_keys(prefix)
+        # Extract asset IDs from full keys
+        asset_ids = set()
+        for key in keys:
+            # Remove prefix and extension
+            name = key.replace(prefix, "")
+            asset_id = name.rsplit(".", 1)[0] if "." in name else name
+            if fnmatch.fnmatch(asset_id, pattern):
+                asset_ids.add(asset_id)
+        return sorted(asset_ids)
+    else:
+        raw_dir = Path(get_data_dir()) / "raw"
+        if not raw_dir.exists():
+            return []
+        asset_ids = set()
+        for path in raw_dir.iterdir():
+            if path.is_file():
+                asset_id = path.stem.rsplit(".", 1)[0] if ".json" in path.name or ".parquet" in path.name else path.stem
+                if fnmatch.fnmatch(asset_id, pattern):
+                    asset_ids.add(asset_id)
+        return sorted(asset_ids)

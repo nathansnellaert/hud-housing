@@ -4,8 +4,6 @@ Downloads CSV/Excel files from HUD USER portal.
 No authentication required.
 """
 
-import io
-import zipfile
 from subsets_utils import get, save_raw_file, load_state, save_state
 
 # HUD USER datasets
@@ -59,13 +57,9 @@ def run():
             response = get(dataset_info["url"], timeout=120)
             response.raise_for_status()
 
-            # Save binary content
-            with open(f"hud_{dataset_key}.{dataset_info['format']}", "wb") as f:
-                f.write(response.content)
-
-            # Also save via subsets_utils for consistency
+            # Save binary content directly (xlsx files are binary)
             save_raw_file(
-                response.content.decode("latin-1"),
+                response.content,
                 f"hud_{dataset_key}",
                 extension=dataset_info["format"],
             )

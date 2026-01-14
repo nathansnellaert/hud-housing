@@ -21,14 +21,17 @@ Output columns:
 
 import pandas as pd
 import pyarrow as pa
-from io import BytesIO
-from subsets_utils import load_raw_file, sync_data, sync_metadata
-from .test import test
+from pathlib import Path
+from python_calamine import CalamineWorkbook
+from subsets_utils import upload_data, validate
+from subsets_utils.environment import get_data_dir
+from subsets_utils.testing import assert_valid_year, assert_in_set
+
+from nodes.hud_data import run as download
 
 DATASET_ID = "hud_homeless_counts"
 
 METADATA = {
-    "id": DATASET_ID,
     "title": "HUD Point-in-Time Homeless Counts",
     "description": "Annual Point-in-Time (PIT) homeless counts by Continuum of Care (CoC) from 2007-2024. PIT counts are conducted on a single night in January each year.",
     "source": "HUD Office of Community Planning and Development",
@@ -128,19 +131,62 @@ def _extract_shelter_type(df: pd.DataFrame, year: int, shelter_type: str) -> lis
     return rows
 
 
+def test(table: pa.Table) -> None:
+    """Validate Homeless Counts output."""
+    validate(table, {
+        "columns": {
+            "coc_number": "string",
+            "coc_name": "string",
+            "year": "string",
+            "count_type": "string",
+            "total": "int",
+        },
+        "not_null": ["coc_number", "year", "count_type", "total"],
+        "unique": ["coc_number", "year", "count_type"],
+        "min_rows": 10000,  # ~400 CoCs x 18 years x ~3 shelter types
+    })
+
+    # Validate years are in expected range
+    assert_valid_year(table, "year")
+    years = set(table.column("year").to_pylist())
+    assert "2024" in years, "Should include 2024 data"
+    assert "2007" in years or "2008" in years, "Should include early years"
+
+    # Validate count types
+    assert_in_set(table, "count_type", {"Overall", "Sheltered", "Unsheltered"})
+
+    # Validate CoC number format (XX-NNN)
+    coc_numbers = table.column("coc_number").to_pylist()
+    sample = coc_numbers[:10]
+    for coc in sample:
+        assert len(coc) >= 6, f"CoC number should be at least 6 chars: {coc}"
+        assert "-" in coc, f"CoC number should contain dash: {coc}"
+
+    # Check we have reasonable coverage
+    unique_cocs = len(set(coc_numbers))
+    assert unique_cocs >= 300, f"Expected at least 300 CoCs, got {unique_cocs}"
+
+    print(f"  Validated {len(table):,} Homeless Count records across {unique_cocs} CoCs")
+
+
 def run():
     """Transform Point-in-Time Homeless Counts data."""
     print("Transforming Point-in-Time Homeless Counts...")
 
-    data = load_raw_file("hud_pit_2024", extension="xlsb")
-    if isinstance(data, str):
-        data = data.encode("latin-1")
+    filepath = Path(get_data_dir()) / "raw" / "hud_pit_2024.xlsb"
+    wb = CalamineWorkbook.from_path(str(filepath))
 
     all_rows = []
 
     for year in YEARS:
+        sheet_name = str(year)
+        if sheet_name not in wb.sheet_names:
+            print(f"  Warning: Sheet {year} not found")
+            continue
         try:
-            df = pd.read_excel(BytesIO(data), sheet_name=str(year), engine="calamine")
+            rows = wb.get_sheet_by_name(sheet_name).to_python()
+            headers = [str(h) for h in rows[0]]
+            df = pd.DataFrame(rows[1:], columns=headers)
         except Exception as e:
             print(f"  Warning: Could not read year {year}: {e}")
             continue
@@ -156,13 +202,32 @@ def run():
     print(f"  Total: {len(all_rows):,} records")
 
     df = pd.DataFrame(all_rows)
-    table = pa.Table.from_pandas(df, preserve_index=False)
+
+    # Define explicit schema to avoid null type columns
+    schema = pa.schema([
+        pa.field("coc_number", pa.string(), nullable=False),
+        pa.field("coc_name", pa.string(), nullable=True),
+        pa.field("year", pa.string(), nullable=False),
+        pa.field("count_type", pa.string(), nullable=False),
+        pa.field("total", pa.int64(), nullable=True),
+        pa.field("under_18", pa.int64(), nullable=True),
+        pa.field("age_18_to_24", pa.int64(), nullable=True),
+        pa.field("over_24", pa.int64(), nullable=True),
+        pa.field("individuals", pa.int64(), nullable=True),
+        pa.field("people_in_families", pa.int64(), nullable=True),
+        pa.field("veterans", pa.int64(), nullable=True),
+        pa.field("chronically_homeless", pa.int64(), nullable=True),
+    ])
+    table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
 
     test(table)
 
-    sync_data(table, DATASET_ID, mode="overwrite")
-    sync_metadata(DATASET_ID, METADATA)
-
+    upload_data(table, DATASET_ID, mode="overwrite")
+NODES = {
+    download: [],
+    run: [download],
+}
 
 if __name__ == "__main__":
+    download()
     run()

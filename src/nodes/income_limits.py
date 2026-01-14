@@ -12,14 +12,17 @@ The *_N suffix indicates household size (1-8 persons).
 
 import pandas as pd
 import pyarrow as pa
-from io import BytesIO
-from subsets_utils import load_raw_file, sync_data, sync_metadata
-from .test import test
+from pathlib import Path
+from python_calamine import CalamineWorkbook
+from subsets_utils import upload_data, validate
+from subsets_utils.environment import get_data_dir
+from subsets_utils.testing import assert_valid_year, assert_positive, assert_in_set
+
+from nodes.hud_data import run as download
 
 DATASET_ID = "hud_income_limits"
 
 METADATA = {
-    "id": DATASET_ID,
     "title": "HUD Income Limits",
     "description": "Section 8 income limits by area, defining eligibility thresholds for housing assistance programs. Includes Very Low (50% AMI), Extremely Low (30% AMI), and Low (80% AMI) income limits.",
     "source": "HUD Office of Policy Development and Research",
@@ -64,15 +67,68 @@ METADATA = {
 }
 
 
+def test(table: pa.Table) -> None:
+    """Validate Income Limits output."""
+    validate(table, {
+        "columns": {
+            "fips": "string",
+            "state_code": "string",
+            "state_fips": "string",
+            "state_name": "string",
+            "hud_area_code": "string",
+            "hud_area_name": "string",
+            "county_fips": "string",
+            "county_name": "string",
+            "metro": "int",
+            "fiscal_year": "string",
+            "median_income": "int",
+            "eli_1": "int",
+            "eli_4": "int",
+            "vli_1": "int",
+            "vli_4": "int",
+            "li_1": "int",
+            "li_4": "int",
+        },
+        "not_null": ["fips", "state_code", "county_name", "fiscal_year", "median_income"],
+        "unique": ["fips"],
+        "min_rows": 4500,
+    })
+
+    # Validate fiscal year
+    assert_valid_year(table, "fiscal_year")
+    fiscal_years = set(table.column("fiscal_year").to_pylist())
+    assert fiscal_years == {"2024"}, f"Expected FY2024, got {fiscal_years}"
+
+    # Validate income limits are positive
+    assert_positive(table, "median_income")
+    assert_positive(table, "eli_4")
+    assert_positive(table, "vli_4")
+    assert_positive(table, "li_4")
+
+    # Validate income hierarchy: ELI < VLI < LI
+    df = table.to_pandas()
+    assert (df["eli_4"] <= df["vli_4"]).all(), "ELI should be <= VLI"
+    assert (df["vli_4"] <= df["li_4"]).all(), "VLI should be <= LI"
+
+    # Validate metro is 0 or 1
+    assert_in_set(table, "metro", {0, 1})
+
+    # Validate state codes
+    state_codes = set(table.column("state_code").to_pylist())
+    assert len(state_codes) >= 50, f"Expected at least 50 states, got {len(state_codes)}"
+
+    print(f"  Validated {len(table):,} Income Limit records")
+
+
 def run():
     """Transform Income Limits data."""
     print("Transforming Income Limits...")
 
-    data = load_raw_file("hud_income_limits_2024", extension="xlsx")
-    if isinstance(data, str):
-        data = data.encode("latin-1")
-
-    df = pd.read_excel(BytesIO(data), engine="calamine")
+    filepath = Path(get_data_dir()) / "raw" / "hud_income_limits_2024.xlsx"
+    wb = CalamineWorkbook.from_path(str(filepath))
+    rows = wb.get_sheet_by_name(wb.sheet_names[0]).to_python()
+    headers = [str(h) for h in rows[0]]
+    df = pd.DataFrame(rows[1:], columns=headers)
     print(f"  Loaded {len(df):,} rows")
 
     result = pd.DataFrame({
@@ -122,9 +178,12 @@ def run():
 
     test(table)
 
-    sync_data(table, DATASET_ID, mode="overwrite")
-    sync_metadata(DATASET_ID, METADATA)
-
+    upload_data(table, DATASET_ID, mode="overwrite")
+NODES = {
+    download: [],
+    run: [download],
+}
 
 if __name__ == "__main__":
+    download()
     run()

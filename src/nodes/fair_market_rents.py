@@ -21,14 +21,15 @@ import pandas as pd
 import pyarrow as pa
 from pathlib import Path
 from python_calamine import CalamineWorkbook
-from subsets_utils import sync_data, sync_metadata
+from subsets_utils import upload_data, validate
 from subsets_utils.environment import get_data_dir
-from .test import test
+from subsets_utils.testing import assert_valid_year, assert_positive, assert_in_set
+
+from nodes.hud_data import run as download
 
 DATASET_ID = "hud_fair_market_rents"
 
 METADATA = {
-    "id": DATASET_ID,
     "title": "HUD Fair Market Rents",
     "description": "Fair Market Rents (FMRs) by county from HUD. FMRs are used to determine payment standards for Housing Choice Voucher programs.",
     "source": "HUD Office of Policy Development and Research",
@@ -81,6 +82,52 @@ def _load_fmr_year(asset_id: str, fiscal_year: str) -> pd.DataFrame:
     })
 
 
+def test(table: pa.Table) -> None:
+    """Validate Fair Market Rents output."""
+    validate(table, {
+        "columns": {
+            "state_code": "string",
+            "state_fips": "string",
+            "county_name": "string",
+            "fips": "string",
+            "hud_area_code": "string",
+            "hud_area_name": "string",
+            "metro": "int",
+            "fiscal_year": "string",
+            "population": "int",
+            "fmr_0br": "int",
+            "fmr_1br": "int",
+            "fmr_2br": "int",
+            "fmr_3br": "int",
+            "fmr_4br": "int",
+        },
+        "not_null": ["state_code", "county_name", "fips", "fiscal_year", "fmr_2br"],
+        "unique": ["fips", "fiscal_year"],
+        "min_rows": 9000,  # ~4764 rows per year x 2 years
+    })
+
+    # Validate fiscal years
+    assert_valid_year(table, "fiscal_year")
+    fiscal_years = set(table.column("fiscal_year").to_pylist())
+    assert fiscal_years == {"2024", "2025"}, f"Expected FY2024 and FY2025, got {fiscal_years}"
+
+    # Validate FMRs are positive
+    assert_positive(table, "fmr_0br")
+    assert_positive(table, "fmr_1br")
+    assert_positive(table, "fmr_2br")
+    assert_positive(table, "fmr_3br")
+    assert_positive(table, "fmr_4br")
+
+    # Validate metro is 0 or 1
+    assert_in_set(table, "metro", {0, 1})
+
+    # Validate state codes
+    state_codes = set(table.column("state_code").to_pylist())
+    assert len(state_codes) >= 50, f"Expected at least 50 states, got {len(state_codes)}"
+
+    print(f"  Validated {len(table):,} Fair Market Rent records")
+
+
 def run():
     """Transform Fair Market Rents data."""
     print("Transforming Fair Market Rents...")
@@ -100,9 +147,12 @@ def run():
 
     test(table)
 
-    sync_data(table, DATASET_ID, mode="overwrite")
-    sync_metadata(DATASET_ID, METADATA)
-
+    upload_data(table, DATASET_ID, mode="overwrite")
+NODES = {
+    download: [],
+    run: [download],
+}
 
 if __name__ == "__main__":
+    download()
     run()

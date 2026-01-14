@@ -72,3 +72,11 @@ def run():
             print(f"    Error: {e}")
 
     print(f"\nIngested {len(completed)} datasets")
+
+
+NODES = {
+    run: [],
+}
+
+if __name__ == "__main__":
+    run()

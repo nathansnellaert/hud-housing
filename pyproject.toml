@@ -1,0 +1,24 @@
+[project]
+name = "hud-housing"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=5.9.0",
+    "httpx",
+    "pyarrow",
+    "boto3",
+    "tenacity",
+    "ratelimit",
+    "duckdb",
+    "requests",
+    "deltalake>=0.17.0",
+    "sqlalchemy>=2.0.43",
+    "openpyxl>=3.1.5",
+    "python-calamine>=0.6.1",
+    "pandas>=2.3.3",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "psutil>=5.9.0",
+]

@@ -83,25 +83,23 @@ def _extract_shelter_type(df: pd.DataFrame, year: int, shelter_type: str) -> lis
     """
     rows = []
 
-    # Column name patterns vary by year and shelter type
     if shelter_type == "Overall":
-        prefix = "Overall Homeless"
+        base = "Overall Homeless"
     elif shelter_type == "Sheltered":
-        # Sheltered = ES + TH + SH (or just ES + TH in earlier years)
-        # We'll use the combined values where available
-        prefix = "Sheltered"
-    else:  # Unsheltered
-        prefix = "Unsheltered"
+        base = "Sheltered Total Homeless"
+    else:
+        base = "Unsheltered Homeless"
 
-    # Find relevant columns
-    total_col = _get_col(df, [f"{prefix} Homeless", f"{prefix}"])
-    under_18_col = _get_col(df, [f"{prefix} Homeless - Under 18", f"{prefix} - Under 18"])
-    age_18_24_col = _get_col(df, [f"{prefix} Homeless - Age 18 to 24", f"{prefix} - 18 to 24"])
-    over_24_col = _get_col(df, [f"{prefix} Homeless - Over 24", f"{prefix} - Over 24"])
-    individuals_col = _get_col(df, [f"{prefix} Homeless - Homeless Individuals", f"{prefix} - Individuals"])
-    families_col = _get_col(df, [f"{prefix} Homeless - Homeless People in Families", f"{prefix} - Families"])
-    veterans_col = _get_col(df, [f"{prefix} Homeless - Veterans", f"{prefix} Veterans"])
-    chronic_col = _get_col(df, [f"{prefix} Homeless - Chronically Homeless", f"{prefix} Chronically"])
+    chronic_base = base.replace("Homeless", "Chronically Homeless")
+
+    total_col = _get_col(df, [base])
+    under_18_col = _get_col(df, [f"{base} - Under 18"])
+    age_18_24_col = _get_col(df, [f"{base} - Age 18 to 24"])
+    over_24_col = _get_col(df, [f"{base} - Over 24"])
+    individuals_col = _get_col(df, [f"{base} Individuals"])
+    families_col = _get_col(df, [f"{base} People in Families"])
+    veterans_col = _get_col(df, [f"{base} Veterans"])
+    chronic_col = _get_col(df, [chronic_base, f"{chronic_base} Individuals"])
 
     for _, row in df.iterrows():
         coc_number = row.get("CoC Number", "")

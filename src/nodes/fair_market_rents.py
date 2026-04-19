@@ -17,12 +17,11 @@ Combines FY2024 and FY2025 FMR data into a unified dataset with columns:
 - fmr_4br: Fair Market Rent for 4-bedroom
 """
 
+from io import BytesIO
 import pandas as pd
 import pyarrow as pa
-from pathlib import Path
 from python_calamine import CalamineWorkbook
-from subsets_utils import merge, validate, publish
-from subsets_utils.environment import get_data_dir
+from subsets_utils import merge, validate, publish, load_raw_file
 from subsets_utils.testing import assert_valid_year, assert_positive, assert_in_set
 
 from nodes.hud_data import run as download
@@ -35,6 +34,7 @@ METADATA = {
     "description": "Fair Market Rents (FMRs) by county from HUD. FMRs are used to determine payment standards for Housing Choice Voucher programs.",
     "source": "HUD Office of Policy Development and Research",
     "source_url": "https://www.huduser.gov/portal/datasets/fmr.html",
+    "license": "Public Domain (U.S. Government Work)",
     "column_descriptions": {
         "state_code": "2-letter state code (e.g., AL, AK)",
         "state_fips": "State FIPS code",
@@ -56,8 +56,8 @@ METADATA = {
 
 def _load_fmr_year(asset_id: str, fiscal_year: str) -> pd.DataFrame:
     """Load and standardize FMR data for a single fiscal year."""
-    filepath = Path(get_data_dir()) / "raw" / f"{asset_id}.xlsx"
-    wb = CalamineWorkbook.from_path(str(filepath))
+    xlsx_bytes = load_raw_file(asset_id, "xlsx", binary=True)
+    wb = CalamineWorkbook.from_filelike(BytesIO(xlsx_bytes))
     rows = wb.get_sheet_by_name(wb.sheet_names[0]).to_python()
     headers = [str(h).lower() for h in rows[0]]
     df = pd.DataFrame(rows[1:], columns=headers)
@@ -150,6 +150,8 @@ def run():
 
     merge(table, DATASET_ID, key=["fips", "fiscal_year"])
     publish(DATASET_ID, METADATA)
+
+
 NODES = {
     download: [],
     run: [download],

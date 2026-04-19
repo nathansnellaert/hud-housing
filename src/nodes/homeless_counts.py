@@ -19,12 +19,11 @@ Output columns:
 - chronically_homeless: Chronically homeless individuals
 """
 
+from io import BytesIO
 import pandas as pd
 import pyarrow as pa
-from pathlib import Path
 from python_calamine import CalamineWorkbook
-from subsets_utils import merge, validate, publish
-from subsets_utils.environment import get_data_dir
+from subsets_utils import merge, validate, publish, load_raw_file
 from subsets_utils.testing import assert_valid_year, assert_in_set
 
 from nodes.hud_data import run as download
@@ -37,6 +36,7 @@ METADATA = {
     "description": "Annual Point-in-Time (PIT) homeless counts by Continuum of Care (CoC) from 2007-2024. PIT counts are conducted on a single night in January each year.",
     "source": "HUD Office of Community Planning and Development",
     "source_url": "https://www.hudexchange.info/resource/3031/pit-and-hic-data-since-2007/",
+    "license": "Public Domain (U.S. Government Work)",
     "column_descriptions": {
         "coc_number": "Continuum of Care identifier (e.g., AK-500)",
         "coc_name": "Full name of the Continuum of Care region",
@@ -174,8 +174,8 @@ def run():
     """Transform Point-in-Time Homeless Counts data."""
     print("Transforming Point-in-Time Homeless Counts...")
 
-    filepath = Path(get_data_dir()) / "raw" / "hud_pit_2024.xlsb"
-    wb = CalamineWorkbook.from_path(str(filepath))
+    xlsb_bytes = load_raw_file("hud_pit_2024", "xlsb", binary=True)
+    wb = CalamineWorkbook.from_filelike(BytesIO(xlsb_bytes))
 
     all_rows = []
 
@@ -225,6 +225,8 @@ def run():
 
     merge(table, DATASET_ID, key=["coc_number", "year", "count_type"])
     publish(DATASET_ID, METADATA)
+
+
 NODES = {
     download: [],
     run: [download],

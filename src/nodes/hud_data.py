@@ -53,23 +53,18 @@ def run():
     for i, (dataset_key, dataset_info) in enumerate(pending, 1):
         print(f"\n[{i}/{len(pending)}] Fetching {dataset_info['name']}...")
 
-        try:
-            response = get(dataset_info["url"], timeout=120)
-            response.raise_for_status()
+        response = get(dataset_info["url"], timeout=120)
+        response.raise_for_status()
 
-            # Save binary content directly (xlsx files are binary)
-            save_raw_file(
-                response.content,
-                f"hud_{dataset_key}",
-                extension=dataset_info["format"],
-            )
-            print(f"    Saved {len(response.content):,} bytes")
+        save_raw_file(
+            response.content,
+            f"hud_{dataset_key}",
+            extension=dataset_info["format"],
+        )
+        print(f"    Saved {len(response.content):,} bytes")
 
-            completed.add(dataset_key)
-            save_state("hud_housing", {"completed": list(completed)})
-
-        except Exception as e:
-            print(f"    Error: {e}")
+        completed.add(dataset_key)
+        save_state("hud_housing", {"completed": list(completed)})
 
     print(f"\nIngested {len(completed)} datasets")
 
